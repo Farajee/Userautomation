@@ -1,0 +1,139 @@
+---
+- hosts: "localhost"
+  connection: "local"
+  become: yes
+  become_user: root
+  
+  vars:
+    admin_publickey: ssh-ed25519 ......
+    dirs:
+      - git
+      - documentation
+      - export
+      - .credentials
+    users:
+      john:
+        state: present
+        password: "@Very$ecure1"
+        shell: /bin/bash
+        groups: developers, staff
+      bob:
+        state: present
+        password: "@Very$ecure2"
+        shell: /bin/bash
+        groups: developers, staff
+
+
+  tasks:
+  - name: create groups
+    group:
+      name: "{{ item }}"
+      state: present
+    with_items:
+      - staff
+      - developers
+
+
+  - name: "Create user accounts and add users to groups"
+    user:
+      name: "{{ item.key }}"
+      groups: "{{ item.value.groups }}"
+      shell: "{{ item.value.shell }}"
+      password: "{{ item.value.password | password_hash('sha512') }}"
+      state: "{{ item.value.state }}"
+      generate_ssh_key: yes
+      ssh_key_bits: 2048
+      ssh_key_file: .ssh/id_rsa
+    loop: "{{ lookup('dict', users) }}"
+    
+    
+    
+    
+  - name: create directory if they don't exist
+    file:
+      path: /home/{{ item.0 }}/{{ item.1 }}
+      state: directory
+      owner: "{{ item.0 }}"
+      group: "{{ item.0 }}"
+      mode: '0700'
+    with_nested:
+      - "{{ users }}"
+      - "{{ dirs }}"
+
+    
+    
+    
+  - name: credentials file
+    copy:
+      content: '{{ item.key }}:{{ item.value.password }}'
+      dest: /home/{{ item.key }}/.credentials/app
+      owner: "{{ item.key }}"
+      group: "{{ item.key }}"
+      mode: '0744'
+    loop: "{{ lookup('dict', users) }}"
+    
+  - name: keybase authentication
+    blockinfile:
+      path: /etc/ssh/sshd_config
+      block: |
+        Match User {{ item.key }}
+            PasswordAuthentication no
+            PubkeyAuthentication yes
+      marker: "# {mark} ANSIBLE MANAGED BLOCK {{item.key}}"
+    loop: "{{ lookup('dict', users) }}"
+    
+  - name: authorized key file
+    copy:
+      content: '{{ admin_publickey }}'
+      dest: /home/{{ item.key }}/.ssh/authorized_keys
+      owner: "{{ item.key }}"
+      group: "{{ item.key }}"
+      mode: '0700'
+    loop: "{{ lookup('dict', users) }}"
+    
+    
+  - name: "access to log"
+    file:
+      path: /mnt/logs
+      state: directory
+      owner: root
+      group: staff
+      mode: '0750'
+      
+      
+      
+  - name: "access to scratch"
+    file:
+      path: /mnt/scratch
+      state: directory
+      owner: root
+      group: developers
+      mode: '0760'
+      
+      
+      
+  - name: "PATH"
+    lineinfile:
+      path: /home/{{ item.key }}/.profile
+      line: 'PATH="/opt/app/bin:/opt/app2/exec:$PATH"'
+    loop: "{{ lookup('dict', users) }}"
+      
+      
+      
+  - name: "sudo withput password for the script"
+    lineinfile:
+      path: /etc/sudoers
+      line: '{{ item.key }} ALL=(ALL) NOPASSWD: /usr/local/sbin/generate_report.sh'
+    loop: "{{ lookup('dict', users) }}"
+    
+    
+  - name: "max open file"
+    blockinfile:
+      path: /etc/security/limits.conf
+      block: |
+        {{ item.key }}  soft nofile 10240
+        {{ item.key }}  soft nofile 10240
+      marker: "# {mark} ANSIBLE MANAGED BLOCK {{item.key}}"
+    loop: "{{ lookup('dict', users) }}"
+    
+...
